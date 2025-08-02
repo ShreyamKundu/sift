@@ -1,35 +1,42 @@
+# A list of folder names to completely ignore during organization.
+exclude_folders:
+  - "node_modules"
+  - ".git"
+  - "Backups"
+  - "_private"
+
 # Custom Sift Configuration
 # Define your folder names and the extensions that belong in them.
+rules:
+  Images & Graphics:
+    - .jpg
+    - .jpeg
+    - .png
+    - .gif
+    - .svg
+    - .psd
+    - .ai
 
-Images & Graphics:
-  - .jpg
-  - .jpeg
-  - .png
-  - .gif
-  - .svg
-  - .psd
-  - .ai
+  Text Documents:
+    - .pdf
+    - .docx
+    - .doc
+    - .txt
+    - .md
 
-Text Documents:
-  - .pdf
-  - .docx
-  - .doc
-  - .txt
-  - .md
+  Audio Files:
+    - .mp3
+    - .wav
 
-Audio Files:
-  - .mp3
-  - .wav
-
-Video Files:
-  - .mp4
-  - .mov
-  - .mkv
-
-Code & Scripts:
-  - .go
-  - .js
-  - .py
-  - .html
-  - .css
-  - .sh
+  Video Files:
+    - .mp4
+    - .mov
+    - .mkv
+    
+  Code & Scripts:
+    - .go
+    - .js
+    - .py
+    - .html
+    - .css
+    - .sh
