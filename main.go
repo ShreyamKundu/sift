@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
@@ -53,51 +54,53 @@ var ruleMap = map[string]string{
 }
 
 func main() {
-	fmt.Print("Welcome to Sift - Your Smart File Organizer!\n")
+	fmt.Println("Welcome to Sift - Your Smart File Organizer!")
 
-	const sourceDir = "test-folder"
+	// CLI Flags
+	sourceDir := flag.String("source", "", "The source directory to organize.")
+	dryRun := flag.Bool("dry-run", false, "Simulate the organization without moving files.")
+	flag.Parse()
 
-	fmt.Printf("\nScanning directory: %s\n\n", sourceDir)
+	// Input Validation
+	if *sourceDir == "" {
+		log.Fatalln("Error: The -source flag is required. Please specify a directory to organize.")
+	}
 
-	err := filepath.WalkDir(sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
+	if *dryRun {
+		fmt.Println("\n⚠️  DRY RUN MODE ENABLED: No files will be moved. ⚠️")
+	}
+
+	fmt.Printf("\nScanning directory: %s\n\n", *sourceDir)
+
+	err := filepath.WalkDir(*sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if currentPath == sourceDir {
-			return nil // Skip the root directory
+		if currentPath == *sourceDir || d.IsDir() {
+			return nil // Skip the root directory and other subdirectories
 		}
 
-		// Skip directories
-		if d.IsDir() {
-			return nil
-		}
-
-		//Get the file extension
 		ext := strings.ToLower(filepath.Ext(currentPath))
-
 		destSubFolder, ok := ruleMap[ext]
-
 		if !ok {
-			destSubFolder = "Others" // Default folder for unmatched files
+			destSubFolder = "Others"
 		}
 
-		// Construct the full destination path.
-		// All organized files will be placed inside the sourceDir.
-		// e.g., test-folder/Images/
-		destDir := filepath.Join(sourceDir, destSubFolder)
-
-		// Create the destination subdirectory if it doesn't exist.
-		if err := os.MkdirAll(destDir, 0755); err != nil {
-			log.Printf("Error creating directory %q: %v\n", destDir, err)
-			return err
-		}
-
-		// Construct the final path for the file in its new home.
+		destDir := filepath.Join(*sourceDir, destSubFolder)
 		fileName := filepath.Base(currentPath)
 		newPath := filepath.Join(destDir, fileName)
 
-		// Move the file.
+		if *dryRun {
+			fmt.Printf("[Dry Run] Move %s -> %s\n", currentPath, newPath)
+			return nil
+		}
+
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			log.Printf("Error creating directory %s: %v\n", destDir, err)
+			return err
+		}
+
 		fmt.Printf("Moving %s -> %s\n", currentPath, newPath)
 		if err := os.Rename(currentPath, newPath); err != nil {
 			log.Printf("Error moving file %s: %v\n", currentPath, err)
@@ -108,7 +111,7 @@ func main() {
 	})
 
 	if err != nil {
-		log.Fatalf("Error processing directory %q: %v\n", sourceDir, err)
+		log.Fatalf("Error processing directory %q: %v\n", *sourceDir, err)
 	}
 
 	fmt.Println("\nSifting complete!")
