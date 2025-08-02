@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -12,13 +13,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Structs for YAML Parsing
+// --- Structs & Constants ---
+const logFileName = ".sift_log"
+
 type Config struct {
 	ExcludeFolders []string            `yaml:"exclude_folders"`
 	Rules          map[string][]string `yaml:"rules"`
 }
 
-// Default Rules
 var defaultRuleMap = map[string]string{
 	// Images
 	".jpg": "Images", ".jpeg": "Images", ".png": "Images", ".gif": "Images",
@@ -41,6 +43,7 @@ var defaultRuleMap = map[string]string{
 	".gz": "Archives",
 }
 
+// --- Core Functions ---
 func loadConfig(configFile string) (map[string]string, map[string]bool, error) {
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -92,13 +95,25 @@ func getNewPathWithSuffix(path string) string {
 	}
 }
 
-// Main Sifting Logic
+// --- Sifting Logic (Organize Command) ---
 func organizeByFileType(sourceDir string, dryRun, verbose bool, ruleMap map[string]string, exclusionSet map[string]bool) (int, int) {
 	var filesMoved, filesSkipped int
 	destinationFolders := buildDestinationSet(ruleMap)
-	err := filepath.WalkDir(sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
+	logFilePath := filepath.Join(sourceDir, logFileName)
+	logFile, err := os.Create(logFilePath)
+	if err != nil {
+		log.Printf("Error: Could not create log file for undo: %v", err)
+		return 0, 0
+	}
+	defer logFile.Close()
+	logWriter := bufio.NewWriter(logFile)
+	defer logWriter.Flush()
+	err = filepath.WalkDir(sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if currentPath == logFilePath {
+			return nil
 		}
 		if d.IsDir() {
 			if _, isExcluded := exclusionSet[d.Name()]; isExcluded {
@@ -138,6 +153,10 @@ func organizeByFileType(sourceDir string, dryRun, verbose bool, ruleMap map[stri
 			filesSkipped++
 			return err
 		}
+		logLine := fmt.Sprintf("%s,%s\n", finalNewPath, currentPath)
+		if _, err := logWriter.WriteString(logLine); err != nil {
+			log.Printf("Warning: Failed to write to undo log: %v", err)
+		}
 		fmt.Printf("Moved %s -> %s\n", currentPath, finalNewPath)
 		filesMoved++
 		return nil
@@ -150,9 +169,21 @@ func organizeByFileType(sourceDir string, dryRun, verbose bool, ruleMap map[stri
 
 func organizeByDate(sourceDir string, dryRun, verbose bool, exclusionSet map[string]bool) (int, int) {
 	var filesMoved, filesSkipped int
-	err := filepath.WalkDir(sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
+	logFilePath := filepath.Join(sourceDir, logFileName)
+	logFile, err := os.Create(logFilePath)
+	if err != nil {
+		log.Printf("Error: Could not create log file for undo: %v", err)
+		return 0, 0
+	}
+	defer logFile.Close()
+	logWriter := bufio.NewWriter(logFile)
+	defer logWriter.Flush()
+	err = filepath.WalkDir(sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if currentPath == logFilePath {
+			return nil
 		}
 		if d.IsDir() {
 			if _, isExcluded := exclusionSet[d.Name()]; isExcluded {
@@ -190,6 +221,10 @@ func organizeByDate(sourceDir string, dryRun, verbose bool, exclusionSet map[str
 			filesSkipped++
 			return err
 		}
+		logLine := fmt.Sprintf("%s,%s\n", finalNewPath, currentPath)
+		if _, err := logWriter.WriteString(logLine); err != nil {
+			log.Printf("Warning: Failed to write to undo log: %v", err)
+		}
 		fmt.Printf("Moved %s -> %s\n", currentPath, finalNewPath)
 		filesMoved++
 		return nil
@@ -200,59 +235,135 @@ func organizeByDate(sourceDir string, dryRun, verbose bool, exclusionSet map[str
 	return filesMoved, filesSkipped
 }
 
-func main() {
-	fmt.Println("Welcome to Sift - Your Smart File Organizer!")
-
-	sourceDir := flag.String("source", "", "The source directory to organize.")
-	dryRun := flag.Bool("dry-run", false, "Simulate the organization without moving files.")
-	verbose := flag.Bool("verbose", false, "Enable detailed output.")
-	configFile := flag.String("config", "", "Path to a custom config.yml file.")
-	byDate := flag.Bool("by-date", false, "Organize files by date (YYYY/MM-Month).")
-	excludeDirs := flag.String("exclude", "", "Comma-separated list of folder names to exclude.")
-	flag.Parse()
-
-	if *sourceDir == "" {
-		log.Fatalln("Error: The -source flag is required.")
+// --- Undo Logic ---
+func performUndo(sourceDir string) {
+	logFilePath := filepath.Join(sourceDir, logFileName)
+	if _, err := os.Stat(logFilePath); os.IsNotExist(err) {
+		log.Fatalf("Error: No undo log file found in %s. Cannot perform undo.", sourceDir)
 	}
 
-	ruleMap := defaultRuleMap
-	exclusionSet := make(map[string]bool)
+	logFile, err := os.Open(logFilePath)
+	if err != nil {
+		log.Fatalf("Error opening undo log file: %v", err)
+	}
+	defer logFile.Close()
 
-	if *configFile != "" {
-		fmt.Printf("Loading custom rules from: %s\n", *configFile)
-		var err error
-		ruleMap, exclusionSet, err = loadConfig(*configFile)
-		if err != nil {
-			log.Fatalf("Error loading configuration: %v", err)
+	var lines []string
+	scanner := bufio.NewScanner(logFile)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("Error reading undo log file: %v", err)
+	}
+
+	fmt.Printf("Found %d operations to undo.\n", len(lines))
+	var filesReverted int
+
+	// Process the log file in reverse order.
+	for i := len(lines) - 1; i >= 0; i-- {
+		parts := strings.Split(lines[i], ",")
+		if len(parts) != 2 {
+			log.Printf("Warning: Skipping malformed log entry: %s", lines[i])
+			continue
 		}
-	}
+		newPath := parts[0]
+		originalPath := parts[1]
 
-	// Add exclusions from the command-line flag to our set
-	if *excludeDirs != "" {
-		foldersToExclude := strings.Split(*excludeDirs, ",")
-		for _, folder := range foldersToExclude {
-			exclusionSet[strings.TrimSpace(folder)] = true
+		fmt.Printf("Reverting %s -> %s\n", newPath, originalPath)
+		if err := os.Rename(newPath, originalPath); err != nil {
+			log.Printf("Error reverting file %s: %v", newPath, err)
+			log.Println("Stopping undo operation to prevent data loss.")
+			return // Stop if any error occurs
 		}
+		filesReverted++
 	}
 
-	if *dryRun {
-		fmt.Println("\n⚠️  DRY RUN MODE ENABLED: No files will be moved. ⚠️")
-	}
-	fmt.Printf("\nProcessing directory: %s\n\n", *sourceDir)
-
-	var filesMoved, filesSkipped int
-
-	if *byDate {
-		fmt.Println("Organizing by date...")
-		filesMoved, filesSkipped = organizeByDate(*sourceDir, *dryRun, *verbose, exclusionSet)
-	} else {
-		fmt.Println("Organizing by file type...")
-		filesMoved, filesSkipped = organizeByFileType(*sourceDir, *dryRun, *verbose, ruleMap, exclusionSet)
+	// Clean up the log file after a successful undo.
+	if err := os.Remove(logFilePath); err != nil {
+		log.Printf("Warning: Could not remove undo log file: %v", err)
 	}
 
 	fmt.Println("\n--------------------")
-	fmt.Println("Sifting Complete!")
-	fmt.Printf("Files Moved: %d\n", filesMoved)
-	fmt.Printf("Files Skipped (due to errors): %d\n", filesSkipped)
+	fmt.Println("Undo Complete!")
+	fmt.Printf("Files Reverted: %d\n", filesReverted)
 	fmt.Println("--------------------")
+}
+
+// --- Main Application Logic ---
+func main() {
+	organizeCmd := flag.NewFlagSet("organize", flag.ExitOnError)
+	undoCmd := flag.NewFlagSet("undo", flag.ExitOnError)
+	sourceDir := organizeCmd.String("source", "", "The source directory to organize. (Required)")
+	dryRun := organizeCmd.Bool("dry-run", false, "Simulate the organization without moving files.")
+	verbose := organizeCmd.Bool("verbose", false, "Enable detailed output.")
+	configFile := organizeCmd.String("config", "", "Path to a custom config.yml file.")
+	byDate := organizeCmd.Bool("by-date", false, "Organize files by date (YYYY/MM-Month).")
+	excludeDirs := organizeCmd.String("exclude", "", "Comma-separated list of folder names to exclude.")
+	undoSourceDir := undoCmd.String("source", "", "The directory where the organization was performed. (Required)")
+
+	if len(os.Args) < 2 {
+		fmt.Println("Expected 'organize' or 'undo' subcommands.")
+		os.Exit(1)
+	}
+
+	switch os.Args[1] {
+	case "organize":
+		organizeCmd.Parse(os.Args[2:])
+		if *sourceDir == "" {
+			log.Println("Error: The -source flag is required for the organize command.")
+			organizeCmd.PrintDefaults()
+			os.Exit(1)
+		}
+		fmt.Println("Welcome to Sift - Your Smart File Organizer!")
+		ruleMap := defaultRuleMap
+		exclusionSet := make(map[string]bool)
+		if *configFile != "" {
+			fmt.Printf("Loading custom rules from: %s\n", *configFile)
+			var err error
+			ruleMap, exclusionSet, err = loadConfig(*configFile)
+			if err != nil {
+				log.Fatalf("Error loading configuration: %v", err)
+			}
+		}
+		if *excludeDirs != "" {
+			foldersToExclude := strings.Split(*excludeDirs, ",")
+			for _, folder := range foldersToExclude {
+				exclusionSet[strings.TrimSpace(folder)] = true
+			}
+		}
+		if *dryRun {
+			fmt.Println("\n⚠️  DRY RUN MODE ENABLED: No files will be moved. ⚠️")
+		}
+		fmt.Printf("\nProcessing directory: %s\n\n", *sourceDir)
+		var filesMoved, filesSkipped int
+		if *byDate {
+			fmt.Println("Organizing by date...")
+			filesMoved, filesSkipped = organizeByDate(*sourceDir, *dryRun, *verbose, exclusionSet)
+		} else {
+			fmt.Println("Organizing by file type...")
+			filesMoved, filesSkipped = organizeByFileType(*sourceDir, *dryRun, *verbose, ruleMap, exclusionSet)
+		}
+		fmt.Println("\n--------------------")
+		fmt.Println("Sifting Complete!")
+		fmt.Printf("Files Moved: %d\n", filesMoved)
+		fmt.Printf("Files Skipped (due to errors): %d\n", filesSkipped)
+		fmt.Println("--------------------")
+
+	case "undo":
+		undoCmd.Parse(os.Args[2:])
+		if *undoSourceDir == "" {
+			log.Println("Error: The -source flag is required for the undo command.")
+			undoCmd.PrintDefaults()
+			os.Exit(1)
+		}
+		fmt.Println("Sift Undo Operation")
+		fmt.Println("--------------------")
+		performUndo(*undoSourceDir)
+
+	default:
+		fmt.Println("Expected 'organize' or 'undo' subcommands.")
+		os.Exit(1)
+	}
 }
