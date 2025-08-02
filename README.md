@@ -132,7 +132,7 @@ rules:
 * `-dry-run` (optional): Simulates the process without moving any files.
 * `-verbose` (optional): Provides detailed logs, like which folders are being skipped.
 * `-config` (optional): Path to a custom `config.yml` file.
-* `-by-date` (optional): Organizes files by date (YYYY/MM-Month) instead of by file type.
+* `-by-date` (optional): Organizes files by date (YYYY/DD-Month) instead of by file type.
 * `-exclude` (optional): A comma-separated list of folder names to temporarily exclude for a single run.
 
 ### `sift undo`
