@@ -35,25 +35,18 @@ var defaultRuleMap = map[string]string{
 	".gz": "Archives",
 }
 
-// loadRulesFromConfig reads a YAML file and converts it into our ruleMap format.
 func loadRulesFromConfig(configFile string) (map[string]string, error) {
-	// Read the raw YAML file content
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return nil, fmt.Errorf("error reading config file: %w", err)
 	}
-
-	// The YAML is structured as "FolderName: [extensions...]", so we parse it into this temporary map.
 	var parsedConfig map[string][]string
 	if err := yaml.Unmarshal(data, &parsedConfig); err != nil {
 		return nil, fmt.Errorf("error parsing YAML: %w", err)
 	}
-
-	// Now, we invert the map to create our final ruleMap: {".ext": "FolderName"}
 	ruleMap := make(map[string]string)
 	for folderName, extensions := range parsedConfig {
 		for _, ext := range extensions {
-			// Ensure the extension starts with a dot and is lowercase for consistent matching.
 			normalizedExt := strings.ToLower(ext)
 			if !strings.HasPrefix(normalizedExt, ".") {
 				normalizedExt = "." + normalizedExt
@@ -61,7 +54,6 @@ func loadRulesFromConfig(configFile string) (map[string]string, error) {
 			ruleMap[normalizedExt] = folderName
 		}
 	}
-
 	return ruleMap, nil
 }
 
@@ -90,6 +82,108 @@ func getNewPathWithSuffix(path string) string {
 	}
 }
 
+func organizeByFileType(sourceDir string, dryRun, verbose bool, ruleMap map[string]string) (int, int) {
+	var filesMoved, filesSkipped int
+	destinationFolders := buildDestinationSet(ruleMap)
+
+	err := filepath.WalkDir(sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if _, isDest := destinationFolders[d.Name()]; isDest {
+				if verbose {
+					fmt.Printf("Skipping already organized directory: %s\n", currentPath)
+				}
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(currentPath))
+		destSubFolder, ok := ruleMap[ext]
+		if !ok {
+			destSubFolder = "Others"
+		}
+		destDir := filepath.Join(sourceDir, destSubFolder)
+		fileName := filepath.Base(currentPath)
+		finalNewPath := getNewPathWithSuffix(filepath.Join(destDir, fileName))
+		if dryRun {
+			fmt.Printf("[Dry Run] Move %s -> %s\n", currentPath, finalNewPath)
+			filesMoved++
+			return nil
+		}
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			log.Printf("Error creating directory %s: %v\n", destDir, err)
+			filesSkipped++
+			return err
+		}
+		if err := os.Rename(currentPath, finalNewPath); err != nil {
+			log.Printf("Error moving file %s: %v\n", currentPath, err)
+			filesSkipped++
+			return err
+		}
+		fmt.Printf("Moved %s -> %s\n", currentPath, finalNewPath)
+		filesMoved++
+		return nil
+	})
+	if err != nil {
+		log.Printf("Error during file type organization: %v\n", err)
+	}
+	return filesMoved, filesSkipped
+}
+
+func organizeByDate(sourceDir string, dryRun, verbose bool) (int, int) {
+	var filesMoved, filesSkipped int
+	err := filepath.WalkDir(sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		// Skip directories
+		if d.IsDir() {
+			return nil
+		}
+
+		// Get file modification time
+		info, err := d.Info()
+		if err != nil {
+			log.Printf("Could not get file info for %s: %v", currentPath, err)
+			filesSkipped++
+			return nil // Continue with next file
+		}
+		modTime := info.ModTime()
+		year := modTime.Format("2006")
+		month := modTime.Format("01-January")
+
+		// Create the destination path: source/Year/Month
+		destDir := filepath.Join(sourceDir, year, month)
+		fileName := filepath.Base(currentPath)
+		finalNewPath := getNewPathWithSuffix(filepath.Join(destDir, fileName))
+
+		if dryRun {
+			fmt.Printf("[Dry Run] Move %s -> %s\n", currentPath, finalNewPath)
+			filesMoved++
+			return nil
+		}
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			log.Printf("Error creating directory %s: %v\n", destDir, err)
+			filesSkipped++
+			return err
+		}
+		if err := os.Rename(currentPath, finalNewPath); err != nil {
+			log.Printf("Error moving file %s: %v\n", currentPath, err)
+			filesSkipped++
+			return err
+		}
+		fmt.Printf("Moved %s -> %s\n", currentPath, finalNewPath)
+		filesMoved++
+		return nil
+	})
+	if err != nil {
+		log.Printf("Error during date organization: %v\n", err)
+	}
+	return filesMoved, filesSkipped
+}
+
 func main() {
 	fmt.Println("Welcome to Sift - Your Smart File Organizer!")
 
@@ -98,6 +192,7 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Simulate the organization without moving files.")
 	verbose := flag.Bool("verbose", false, "Enable detailed output.")
 	configFile := flag.String("config", "", "Path to a custom config.yml file.")
+	byDate := flag.Bool("by-date", false, "Organize files by date (YYYY/MM-Month).")
 	flag.Parse()
 
 	// Input Validation
@@ -105,79 +200,31 @@ func main() {
 		log.Fatalln("Error: The -source flag is required.")
 	}
 
-	// Rule Loading
-	ruleMap := defaultRuleMap
-	if *configFile != "" {
-		fmt.Printf("Loading custom rules from: %s\n", *configFile)
-		var err error
-		ruleMap, err = loadRulesFromConfig(*configFile)
-		if err != nil {
-			log.Fatalf("Error loading configuration: %v", err)
-		}
-	}
-
 	if *dryRun {
 		fmt.Println("\n⚠️  DRY RUN MODE ENABLED: No files will be moved. ⚠️")
 	}
-	fmt.Printf("\nScanning directory: %s\n\n", *sourceDir)
+	fmt.Printf("\nProcessing directory: %s\n\n", *sourceDir)
 
 	var filesMoved, filesSkipped int
-	destinationFolders := buildDestinationSet(ruleMap)
 
-	err := filepath.WalkDir(*sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if d.IsDir() {
-			if _, isDest := destinationFolders[d.Name()]; isDest {
-				if *verbose {
-					fmt.Printf("Skipping already organized directory: %s\n", currentPath)
-				}
-				return filepath.SkipDir
+	if *byDate {
+		fmt.Println("Organizing by date...")
+		filesMoved, filesSkipped = organizeByDate(*sourceDir, *dryRun, *verbose)
+	} else {
+		fmt.Println("Organizing by file type...")
+		ruleMap := defaultRuleMap
+		if *configFile != "" {
+			fmt.Printf("Loading custom rules from: %s\n", *configFile)
+			var err error
+			ruleMap, err = loadRulesFromConfig(*configFile)
+			if err != nil {
+				log.Fatalf("Error loading configuration: %v", err)
 			}
-			return nil
 		}
-
-		ext := strings.ToLower(filepath.Ext(currentPath))
-		destSubFolder, ok := ruleMap[ext]
-		if !ok {
-			destSubFolder = "Others"
-		}
-
-		destDir := filepath.Join(*sourceDir, destSubFolder)
-		fileName := filepath.Base(currentPath)
-		potentialNewPath := filepath.Join(destDir, fileName)
-		finalNewPath := getNewPathWithSuffix(potentialNewPath)
-
-		if *dryRun {
-			fmt.Printf("[Dry Run] Move %s -> %s\n", currentPath, finalNewPath)
-			filesMoved++
-			return nil
-		}
-
-		if err := os.MkdirAll(destDir, 0755); err != nil {
-			log.Printf("Error creating directory %s: %v\n", destDir, err)
-			filesSkipped++
-			return err
-		}
-
-		if err := os.Rename(currentPath, finalNewPath); err != nil {
-			log.Printf("Error moving file %s: %v\n", currentPath, err)
-			filesSkipped++
-			return err
-		}
-
-		fmt.Printf("Moved %s -> %s\n", currentPath, finalNewPath)
-		filesMoved++
-
-		return nil
-	})
-
-	if err != nil {
-		log.Fatalf("Error processing directory %q: %v\n", *sourceDir, err)
+		filesMoved, filesSkipped = organizeByFileType(*sourceDir, *dryRun, *verbose, ruleMap)
 	}
 
+	// Final Summary Report
 	fmt.Println("\n--------------------")
 	fmt.Println("Sifting Complete!")
 	fmt.Printf("Files Moved: %d\n", filesMoved)
