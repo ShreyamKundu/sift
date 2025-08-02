@@ -1,0 +1,35 @@
+# Custom Sift Configuration
+# Define your folder names and the extensions that belong in them.
+
+Images & Graphics:
+  - .jpg
+  - .jpeg
+  - .png
+  - .gif
+  - .svg
+  - .psd
+  - .ai
+
+Text Documents:
+  - .pdf
+  - .docx
+  - .doc
+  - .txt
+  - .md
+
+Audio Files:
+  - .mp3
+  - .wav
+
+Video Files:
+  - .mp4
+  - .mov
+  - .mkv
+
+Code & Scripts:
+  - .go
+  - .js
+  - .py
+  - .html
+  - .css
+  - .sh

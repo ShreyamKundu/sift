@@ -8,9 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
-var ruleMap = map[string]string{
+// Default Rules
+var defaultRuleMap = map[string]string{
 	// Images
 	".jpg": "Images", ".jpeg": "Images", ".png": "Images", ".gif": "Images",
 	".webp": "Images", ".bmp": "Images", ".svg": "Images",
@@ -30,6 +33,36 @@ var ruleMap = map[string]string{
 	// Archives
 	".zip": "Archives", ".rar": "Archives", ".7z": "Archives", ".tar": "Archives",
 	".gz": "Archives",
+}
+
+// loadRulesFromConfig reads a YAML file and converts it into our ruleMap format.
+func loadRulesFromConfig(configFile string) (map[string]string, error) {
+	// Read the raw YAML file content
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return nil, fmt.Errorf("error reading config file: %w", err)
+	}
+
+	// The YAML is structured as "FolderName: [extensions...]", so we parse it into this temporary map.
+	var parsedConfig map[string][]string
+	if err := yaml.Unmarshal(data, &parsedConfig); err != nil {
+		return nil, fmt.Errorf("error parsing YAML: %w", err)
+	}
+
+	// Now, we invert the map to create our final ruleMap: {".ext": "FolderName"}
+	ruleMap := make(map[string]string)
+	for folderName, extensions := range parsedConfig {
+		for _, ext := range extensions {
+			// Ensure the extension starts with a dot and is lowercase for consistent matching.
+			normalizedExt := strings.ToLower(ext)
+			if !strings.HasPrefix(normalizedExt, ".") {
+				normalizedExt = "." + normalizedExt
+			}
+			ruleMap[normalizedExt] = folderName
+		}
+	}
+
+	return ruleMap, nil
 }
 
 func buildDestinationSet(rules map[string]string) map[string]bool {
@@ -64,21 +97,31 @@ func main() {
 	sourceDir := flag.String("source", "", "The source directory to organize.")
 	dryRun := flag.Bool("dry-run", false, "Simulate the organization without moving files.")
 	verbose := flag.Bool("verbose", false, "Enable detailed output.")
+	configFile := flag.String("config", "", "Path to a custom config.yml file.")
 	flag.Parse()
 
 	// Input Validation
 	if *sourceDir == "" {
-		log.Fatalln("Error: The -source flag is required. Please specify a directory to organize.")
+		log.Fatalln("Error: The -source flag is required.")
 	}
+
+	// Rule Loading
+	ruleMap := defaultRuleMap
+	if *configFile != "" {
+		fmt.Printf("Loading custom rules from: %s\n", *configFile)
+		var err error
+		ruleMap, err = loadRulesFromConfig(*configFile)
+		if err != nil {
+			log.Fatalf("Error loading configuration: %v", err)
+		}
+	}
+
 	if *dryRun {
 		fmt.Println("\n⚠️  DRY RUN MODE ENABLED: No files will be moved. ⚠️")
 	}
 	fmt.Printf("\nScanning directory: %s\n\n", *sourceDir)
 
-	// Counters for Summary Report
-	var filesMoved int
-	var filesSkipped int
-
+	var filesMoved, filesSkipped int
 	destinationFolders := buildDestinationSet(ruleMap)
 
 	err := filepath.WalkDir(*sourceDir, func(currentPath string, d fs.DirEntry, err error) error {
@@ -135,9 +178,8 @@ func main() {
 		log.Fatalf("Error processing directory %q: %v\n", *sourceDir, err)
 	}
 
-	// Final Summary Report
 	fmt.Println("\n--------------------")
-	fmt.Println("✅ Sifting Complete!")
+	fmt.Println("Sifting Complete!")
 	fmt.Printf("Files Moved: %d\n", filesMoved)
 	fmt.Printf("Files Skipped (due to errors): %d\n", filesSkipped)
 	fmt.Println("--------------------")
