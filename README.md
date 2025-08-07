@@ -14,6 +14,12 @@ Most importantly, Sift is built to be safe, featuring a "dry-run" mode to previe
 - **Conflict Resolution**: Automatically renames files (e.g., `photo (1).png`) to prevent overwriting existing data.
 - **Cross-Platform**: Built with Go, it can be compiled to run on Windows, macOS, and Linux.
 
+## Demo
+
+https://github.com/user-attachments/assets/5bd39b6f-aae8-4804-a876-bc8ddb562512
+
+
+
 ## Installation
 
 To use Sift, you need to have Go installed on your system.
