@@ -15,6 +15,7 @@ import (
 
 // --- Structs & Constants ---
 const logFileName = ".sift_log"
+const logSeparator = "::SFT::"
 
 type Config struct {
 	ExcludeFolders []string            `yaml:"exclude_folders"`
@@ -22,7 +23,7 @@ type Config struct {
 }
 
 var defaultRuleMap = map[string]string{
-	// Images
+	//Images
 	".jpg": "Images", ".jpeg": "Images", ".png": "Images", ".gif": "Images",
 	".webp": "Images", ".bmp": "Images", ".svg": "Images",
 
@@ -153,7 +154,8 @@ func organizeByFileType(sourceDir string, dryRun, verbose bool, ruleMap map[stri
 			filesSkipped++
 			return err
 		}
-		logLine := fmt.Sprintf("%s,%s\n", finalNewPath, currentPath)
+
+		logLine := fmt.Sprintf("%s%s%s\n", finalNewPath, logSeparator, currentPath)
 		if _, err := logWriter.WriteString(logLine); err != nil {
 			log.Printf("Warning: Failed to write to undo log: %v", err)
 		}
@@ -221,7 +223,8 @@ func organizeByDate(sourceDir string, dryRun, verbose bool, exclusionSet map[str
 			filesSkipped++
 			return err
 		}
-		logLine := fmt.Sprintf("%s,%s\n", finalNewPath, currentPath)
+
+		logLine := fmt.Sprintf("%s%s%s\n", finalNewPath, logSeparator, currentPath)
 		if _, err := logWriter.WriteString(logLine); err != nil {
 			log.Printf("Warning: Failed to write to undo log: %v", err)
 		}
@@ -261,9 +264,9 @@ func performUndo(sourceDir string) {
 	fmt.Printf("Found %d operations to undo.\n", len(lines))
 	var filesReverted int
 
-	// Process the log file in reverse order.
 	for i := len(lines) - 1; i >= 0; i-- {
-		parts := strings.Split(lines[i], ",")
+
+		parts := strings.Split(lines[i], logSeparator)
 		if len(parts) != 2 {
 			log.Printf("Warning: Skipping malformed log entry: %s", lines[i])
 			continue
@@ -275,18 +278,17 @@ func performUndo(sourceDir string) {
 		if err := os.Rename(newPath, originalPath); err != nil {
 			log.Printf("Error reverting file %s: %v", newPath, err)
 			log.Println("Stopping undo operation to prevent data loss.")
-			return // Stop if any error occurs
+			return
 		}
 		filesReverted++
 	}
 
-	// Clean up the log file after a successful undo.
 	if err := os.Remove(logFilePath); err != nil {
 		log.Printf("Warning: Could not remove undo log file: %v", err)
 	}
 
 	fmt.Println("\n--------------------")
-	fmt.Println("Undo Complete!")
+	fmt.Println("✅ Undo Complete!")
 	fmt.Printf("Files Reverted: %d\n", filesReverted)
 	fmt.Println("--------------------")
 }
@@ -316,7 +318,7 @@ func main() {
 			organizeCmd.PrintDefaults()
 			os.Exit(1)
 		}
-		fmt.Println("Welcome to Sift - Your Smart File Organizer!")
+		fmt.Println("🚀 Welcome to Sift - Your Smart File Organizer!")
 		ruleMap := defaultRuleMap
 		exclusionSet := make(map[string]bool)
 		if *configFile != "" {
@@ -346,7 +348,7 @@ func main() {
 			filesMoved, filesSkipped = organizeByFileType(*sourceDir, *dryRun, *verbose, ruleMap, exclusionSet)
 		}
 		fmt.Println("\n--------------------")
-		fmt.Println("Sifting Complete!")
+		fmt.Println("✅ Sifting Complete!")
 		fmt.Printf("Files Moved: %d\n", filesMoved)
 		fmt.Printf("Files Skipped (due to errors): %d\n", filesSkipped)
 		fmt.Println("--------------------")
